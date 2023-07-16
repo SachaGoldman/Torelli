@@ -1,13 +1,13 @@
 import itertools
 
 import numpy
-import sympy
 from scipy import sparse
+from sympy import Matrix
 from sympy.combinatorics.permutations import Permutation
 
 # This hyperparamter represents the genus of the underlying surface who's Torelli Lie Algebra we're interested in
 # so all underlying vector spaces have dimension 2g
-g = 3
+g = 4
 
 
 def tensor(obs):
@@ -69,22 +69,26 @@ def V(i):
     return E(i + g, i, 2 * g)
 
 
-def norm_weight(vector, lie_algebra):
-    return numpy.linalg.norm(numpy.array(weight_of_vector(vector, lie_algebra)))
+def symplectic_generators():
+    # We don't return the cartan-subalgebra, just the rest
+    sp_generators = []
+
+    for i in range(g):
+        sp_generators.append(U(i))
+        sp_generators.append(V(i))
+
+        for j in range(g):
+            if j != i:
+                sp_generators.append(X(i, j))
+                if j < i:
+                    sp_generators.append(Y(i, j))
+                    sp_generators.append(Z(i, j))
+
+    return sp_generators
 
 
-def weight_of_vector(vector, lie_algebra):
-    weight = []
-
-    for matrix in lie_algebra:
-        product = matrix @ vector
-
-        if product.data.any():
-            weight.append(product.data[0] / vector.data[0])
-        else:
-            weight.append(0)
-
-    return tuple(weight)
+def symplectic_cartan_subalgebra_generators():
+    return [H(i) for i in range(g)]
 
 
 def derivation_action(matrix, n):
@@ -94,10 +98,22 @@ def derivation_action(matrix, n):
     return sum([tensor([sparse.csr_matrix(numpy.identity(d)) for _ in range(i)] + [matrix] + [sparse.csr_matrix(numpy.identity(d)) for _ in range(n - i - 1)]) for i in range(n)])
 
 
-def find_smallest(array):
-    new_array = array[numpy.nonzero(array)]
-    idx = numpy.abs(new_array).argmin()
-    return new_array[idx]
+def weight_of_vector(vector, cartan_subalgebra):
+    weight = []
+
+    for matrix in cartan_subalgebra:
+        product = matrix @ vector
+
+        if product.data.any():
+            weight.append(product.data[0] / vector.data[0])
+        else:
+            weight.append(0)
+
+    return tuple([int(num) for num in weight])
+
+
+def norm_weight(vector, lie_algebra):
+    return numpy.linalg.norm(numpy.array(weight_of_vector(vector, lie_algebra)))
 
 
 def dimension(highest_weight):
@@ -120,6 +136,32 @@ def orbit_size(orbit):
         size += len(orbit[key][0])
 
     return size
+
+
+def project(basis):
+    inclusion = sparse.csr_matrix(numpy.array([numpy.squeeze(base.toarray()) for base in basis])).T
+    projection = sparse.csr_matrix(psuedo_inverse(Matrix(inclusion.toarray())))
+
+    return inclusion, projection
+
+
+def psuedo_inverse(matrix):
+    return numpy.array((matrix.T.H * (matrix.T * matrix.T.H) ** -1).T).astype(numpy.float64)
+
+
+def pullback(matricies, function, inverse):
+    return [inverse @ matrix @ function for matrix in matricies]
+
+
+def standard_basis(dim):
+    return [sparse.csr_matrix(v).T for v in list(numpy.identity(dim))]
+
+
+def signif(x, p):
+    x = x.toarray()
+    x_positive = numpy.where(numpy.isfinite(x) & (x != 0), numpy.abs(x), 10**(p-1))
+    mags = 10 ** (p - 1 - numpy.floor(numpy.log10(x_positive)))
+    return sparse.csr_matrix(numpy.round(x * mags) / mags)
 
 
 def find_orbit(vector, rep, lie_algebra):
@@ -160,7 +202,9 @@ def find_orbit(vector, rep, lie_algebra):
 
 
 if __name__ == '__main__':
-    standard_rep_symp_basis = [sparse.csr_matrix(v).T for v in list(numpy.identity(2 * g))]
+    standard_rep_symp_basis = standard_basis(2 * g)
+    sp_generators = symplectic_generators()
+    h_generators = symplectic_cartan_subalgebra_generators()
 
     rep_basis = []
 
@@ -178,33 +222,30 @@ if __name__ == '__main__':
                         [standard_rep_symp_basis[i], standard_rep_symp_basis[i + g], standard_rep_symp_basis[k + g * s_k]]) - alt(
                         [standard_rep_symp_basis[j], standard_rep_symp_basis[j + g], standard_rep_symp_basis[k + g * s_k]]))
 
-    sp_generators = []
-    h_generators = []
+    rep_inclusion, rep_projection = project(rep_basis)
 
-    for i in range(g):
-        h_generators.append(H(i))
+    h_generators_rep = [derivation_action(
+        generator, 3) for generator in h_generators]
 
-        sp_generators.append(U(i))
-        sp_generators.append(V(i))
+    sp_generators_rep = [derivation_action(
+        generator, 3) for generator in sp_generators]
 
-        for j in range(g):
-            if j != i:
-                sp_generators.append(X(i, j))
-                if j < i:
-                    sp_generators.append(Y(i, j))
-                    sp_generators.append(Z(i, j))
+    h_generators_rep_pullback = pullback(h_generators_rep, rep_inclusion, rep_projection)
+    sp_generators_rep_pullback = pullback(sp_generators_rep, rep_inclusion, rep_projection)
+
+    pullback_rep_basis = standard_basis(len(rep_basis))
 
     wedge_basis = []
 
-    for i in range(len(rep_basis)):
+    for i in range(len(pullback_rep_basis)):
         for j in range(i):
-            wedge_basis.append(alt([rep_basis[i], rep_basis[j]]))
+            wedge_basis.append(alt([pullback_rep_basis[i], pullback_rep_basis[j]]))
 
-    h_generators_derivation = [derivation_action(derivation_action(
-        generator, 3), 2) for generator in h_generators]
+    h_generators_derivation = [derivation_action(
+        generator, 2) for generator in h_generators_rep_pullback]
 
-    sp_generators_derivation = [derivation_action(derivation_action(
-        generator, 3), 2) for generator in sp_generators]
+    sp_generators_derivation = [derivation_action(
+        generator, 2) for generator in sp_generators_rep_pullback]
 
     max_norm_weight = -1
 
