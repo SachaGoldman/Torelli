@@ -1,11 +1,11 @@
 import itertools
 
 import numpy
-from scipy import sparse
-from sympy import Matrix
+from sympy import Matrix, SparseMatrix, eye
 from sympy.combinatorics.permutations import Permutation
+from sympy.physics.quantum.matrixutils import matrix_tensor_product
 
-# This hyperparamter represents the genus of the underlying surface who's Torelli Lie Algebra we're interested in
+# This paramter represents the genus of the underlying surface who's Torelli Lie Algebra we're interested in
 # so all underlying vector spaces have dimension 2g
 g = 4
 
@@ -21,7 +21,7 @@ def tensor(obs):
     a = obs[0]
     b = tensor(obs[1:])
 
-    return sparse.kron(a, b)
+    return matrix_tensor_product(a, b)
 
 
 def alt(vectors):
@@ -40,9 +40,9 @@ def alt(vectors):
 
 
 def E(a, b, n):
-    matrix = numpy.zeros((n, n))
+    matrix = SparseMatrix(n, n, [0] * (n ** 2))
     matrix[a, b] = 1
-    return sparse.csr_matrix(matrix)
+    return matrix
 
 
 def H(i):
@@ -95,7 +95,15 @@ def derivation_action(matrix, n):
     # Convert from a standard matrix to the matrix that acts as on the nth tensor power
     d = matrix.shape[0]
 
-    return sum([tensor([sparse.csr_matrix(numpy.identity(d)) for _ in range(i)] + [matrix] + [sparse.csr_matrix(numpy.identity(d)) for _ in range(n - i - 1)]) for i in range(n)])
+    partial_actions = [tensor([SparseMatrix(eye(d)) for _ in range(i)] + [matrix] +
+                              [SparseMatrix(eye(d)) for _ in range(n - i - 1)]) for i in range(n)]
+
+    action = partial_actions[0]
+
+    for partial_action in partial_actions[1:]:
+        action += partial_action
+
+    return action
 
 
 def weight_of_vector(vector, cartan_subalgebra):
@@ -104,8 +112,8 @@ def weight_of_vector(vector, cartan_subalgebra):
     for matrix in cartan_subalgebra:
         product = matrix @ vector
 
-        if product.data.any():
-            weight.append(product.data[0] / vector.data[0])
+        if product.CL:
+            weight.append(product.CL[0][2] / vector.CL[0][2])
         else:
             weight.append(0)
 
@@ -139,14 +147,18 @@ def orbit_size(orbit):
 
 
 def project(basis):
-    inclusion = sparse.csr_matrix(numpy.array([numpy.squeeze(base.toarray()) for base in basis])).T
-    projection = sparse.csr_matrix(psuedo_inverse(Matrix(inclusion.toarray())))
+    inclusion = basis[0]
+    for basis_element in basis[1:]:
+        inclusion = inclusion.row_join(basis_element)
+
+    inclusion = SparseMatrix(inclusion)
+    projection = psuedo_inverse(inclusion)
 
     return inclusion, projection
 
 
 def psuedo_inverse(matrix):
-    return numpy.array((matrix.T.H * (matrix.T * matrix.T.H) ** -1).T).astype(numpy.float64)
+    return (matrix.H * matrix) ** -1 * matrix.H
 
 
 def pullback(matricies, function, inverse):
@@ -154,21 +166,21 @@ def pullback(matricies, function, inverse):
 
 
 def standard_basis(dim):
-    return [sparse.csr_matrix(v).T for v in list(numpy.identity(dim))]
+    basis = []
+
+    for i in range(dim):
+        basis_element = SparseMatrix(Matrix([0] * dim))
+        basis_element[i] = 1
+        basis.append(basis_element)
+
+    return basis
 
 
-def signif(x, p):
-    x = x.toarray()
-    x_positive = numpy.where(numpy.isfinite(x) & (x != 0), numpy.abs(x), 10**(p-1))
-    mags = 10 ** (p - 1 - numpy.floor(numpy.log10(x_positive)))
-    return sparse.csr_matrix(numpy.round(x * mags) / mags)
-
-
-def find_orbit(vector, rep, lie_algebra):
-    max_weight = weight_of_vector(max_weight_space_element, h_generators_derivation)
+def find_orbit(vector, rep, lie_algebra, cartan_subalgebra):
+    max_weight = weight_of_vector(max_weight_space_element, cartan_subalgebra)
 
     orbit = {max_weight: [
-        [max_weight_space_element], numpy.array([numpy.squeeze(max_weight_space_element.toarray())])]}
+        [max_weight_space_element], max_weight_space_element]}
     stack = [(max_weight_space_element, max_weight)]
 
     print(len(wedge_basis))
@@ -177,16 +189,17 @@ def find_orbit(vector, rep, lie_algebra):
         print(f'orbit size: {orbit_size(orbit)}, stack size: {len(stack)}')
         vector, weight = stack.pop(-1)
 
-        for matrix in sp_generators_derivation:
+        for matrix in lie_algebra:
             new_vector = matrix @ vector
-            new_weight = weight_of_vector(new_vector, h_generators_derivation)
+            new_weight = weight_of_vector(new_vector, cartan_subalgebra)
 
-            if new_vector.data.any():
+            if new_vector.CL:
                 if new_weight in orbit:
                     weight_space_orbit_matrix = orbit[new_weight][1]
-                    new_weight_space_orbit_matrix = numpy.append(
-                        weight_space_orbit_matrix, [numpy.squeeze(new_vector.toarray())], axis=0)
-                    rank = numpy.linalg.matrix_rank(new_weight_space_orbit_matrix)
+                    new_weight_space_orbit_matrix = weight_space_orbit_matrix.row_join(new_vector)
+
+                    rank = rank = numpy.linalg.matrix_rank(
+                        numpy.array(new_weight_space_orbit_matrix).astype(numpy.float64))
 
                     if len(orbit[new_weight][0]) == rank - 1:
                         print(f'orbit size: {orbit_size(orbit)}, stack size: {len(stack)}')
@@ -194,8 +207,7 @@ def find_orbit(vector, rep, lie_algebra):
                         orbit[new_weight][0].append(new_vector)
                         stack.append((new_vector, new_weight))
                 else:
-                    orbit[new_weight] = [[new_vector], numpy.array(
-                        [numpy.squeeze(new_vector.toarray())])]
+                    orbit[new_weight] = [[new_vector], new_vector]
                     stack.append((new_vector, new_weight))
 
     return orbit
@@ -205,6 +217,8 @@ if __name__ == '__main__':
     standard_rep_symp_basis = standard_basis(2 * g)
     sp_generators = symplectic_generators()
     h_generators = symplectic_cartan_subalgebra_generators()
+
+    print("Created basic objects")
 
     rep_basis = []
 
@@ -235,27 +249,41 @@ if __name__ == '__main__':
 
     pullback_rep_basis = standard_basis(len(rep_basis))
 
+    print("Found Representation")
+
     wedge_basis = []
 
     for i in range(len(pullback_rep_basis)):
         for j in range(i):
             wedge_basis.append(alt([pullback_rep_basis[i], pullback_rep_basis[j]]))
 
-    h_generators_derivation = [derivation_action(
+    wedge_inclusion, wedge_projection = project(wedge_basis)
+
+    h_generators_wedge = [derivation_action(
         generator, 2) for generator in h_generators_rep_pullback]
 
-    sp_generators_derivation = [derivation_action(
+    sp_generators_wedge = [derivation_action(
         generator, 2) for generator in sp_generators_rep_pullback]
+
+    h_generators_wedge_pullback = pullback(h_generators_wedge, wedge_inclusion, wedge_projection)
+    sp_generators_wedge_pullback = pullback(sp_generators_wedge, wedge_inclusion, wedge_projection)
+
+    pullback_wedge_basis = standard_basis(len(wedge_basis))
+
+    print("Moved to second exterior power")
 
     max_norm_weight = -1
 
-    for new_weight_space_element in wedge_basis:
-        new_norm_weight = norm_weight(new_weight_space_element, h_generators_derivation)
+    for new_weight_space_element in pullback_wedge_basis:
+        new_norm_weight = norm_weight(new_weight_space_element, h_generators_wedge_pullback)
         if new_norm_weight > max_norm_weight:
             max_weight_space_element = new_weight_space_element
             max_norm_weight = new_norm_weight
 
-    orbit = find_orbit(new_weight_space_element, wedge_basis, sp_generators_derivation)
+    print("Found highest weight vector")
 
-    print(len(wedge_basis))
+    orbit = find_orbit(max_weight_space_element, pullback_wedge_basis,
+                       sp_generators_wedge_pullback, h_generators_wedge_pullback)
+
+    print(len(pullback_wedge_basis))
     print(orbit_size(orbit))
