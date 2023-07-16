@@ -140,7 +140,20 @@ def representation_dimension(highest_weight):
 
             dim *= (highest_weight[i] + highest_weight[j] - i - j + 2 * g) / (2 * g - i - j)
 
-    return dim
+    return round(dim)
+
+
+def wedge_rep_size_breakdown():
+    # Return the expected sizes of the repsentations of the second exterior power
+    # This is from Hain's paper
+    if g == 6:
+        return [representation_dimension(highest_weight) for highest_weight in [[2, 2, 1, 1, 0, 0], [2, 2, 0, 0, 0, 0], [1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 0, 0], [1, 1, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0]]]
+    elif g == 5:
+        return [representation_dimension(highest_weight) for highest_weight in [[2, 2, 1, 1, 0], [2, 2, 0, 0, 0], [1, 1, 1, 1, 0], [1, 1, 0, 0, 0], [0, 0, 0, 0, 0]]]
+    elif g == 4:
+        return [representation_dimension(highest_weight) for highest_weight in [[2, 2, 1, 1], [2, 2, 0, 0], [1, 1, 1, 1], [0, 0, 0, 0]]]
+    elif g == 3:
+        return [representation_dimension(highest_weight) for highest_weight in [[2, 2, 0,], [0, 0, 0,]]]
 
 
 def psuedo_inverse(matrix):
