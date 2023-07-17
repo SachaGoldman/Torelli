@@ -7,7 +7,9 @@ from sympy.physics.quantum.matrixutils import matrix_tensor_product
 
 # This paramter represents the genus of the underlying surface who's Torelli Lie Algebra we're interested in
 # so all underlying vector spaces have dimension 2g
-g = 3
+g = 4
+# Extra debugging informations
+debug = False
 
 
 def tensor(obs):
@@ -124,13 +126,16 @@ def weight_of_vector(vector, cartan_subalgebra):
     return tuple([int(num) for num in weight])
 
 
-def norm_weight(vector, lie_algebra):
+def norm_weight(weight):
     # The norm of the weight of a vector
-    return numpy.linalg.norm(numpy.array(weight_of_vector(vector, lie_algebra)))
+    return numpy.linalg.norm(numpy.array(weight))
 
 
 def representation_dimension(highest_weight):
     # Find the dimesion of a representation with highest weight highest_weight
+    highest_weight = [abs(n) for n in highest_weight]
+    highest_weight.sort(reverse=True)
+
     dim = 1
 
     for i in range(g):
@@ -151,7 +156,7 @@ def wedge_rep_size_breakdown():
     elif g == 5:
         return [representation_dimension(highest_weight) for highest_weight in [[2, 2, 1, 1, 0], [2, 2, 0, 0, 0], [1, 1, 1, 1, 0], [1, 1, 0, 0, 0], [0, 0, 0, 0, 0]]]
     elif g == 4:
-        return [representation_dimension(highest_weight) for highest_weight in [[2, 2, 1, 1], [2, 2, 0, 0], [1, 1, 1, 1], [0, 0, 0, 0]]]
+        return [representation_dimension(highest_weight) for highest_weight in [[2, 2, 1, 1], [2, 2, 0, 0], [1, 1, 0, 0], [0, 0, 0, 0]]]
     elif g == 3:
         return [representation_dimension(highest_weight) for highest_weight in [[2, 2, 0,], [0, 0, 0,]]]
 
@@ -189,6 +194,16 @@ def standard_basis(n):
     return basis
 
 
+def copy_sub_rep(sub_rep):
+    sub_rep_copy = {}
+
+    for weight in sub_rep:
+        sub_rep_copy[weight] = [[vector.copy() for vector in sub_rep[weight][0]],
+                                sub_rep[weight][1].copy()]
+
+    return sub_rep_copy
+
+
 def sub_rep_size(sub_rep):
     # Calculate the size of an subrepresentation
     size = 0
@@ -199,53 +214,132 @@ def sub_rep_size(sub_rep):
     return size
 
 
-def find_sub_rep(vector, rep, lie_algebra, cartan_subalgebra, expected_size):
+def insert_into_rep_by_weight(rep_by_weight, cartan_subalgebra, vector):
+    # Returns the rep and the vector if insertion was successful, and None otherwise
+    if vector.CL:
+        weight = weight_of_vector(vector, cartan_subalgebra)
+
+        if weight in rep_by_weight:
+            weight_space_sub_rep_matrix = rep_by_weight[weight][1]
+            new_weight_space_sub_rep_matrix = weight_space_sub_rep_matrix.row_join(
+                vector)
+
+            # This is done in numpy because its faster and we can afford the numerical imprecision
+            rank = numpy.linalg.matrix_rank(
+                numpy.array(new_weight_space_sub_rep_matrix).astype(numpy.float64))
+
+            if len(rep_by_weight[weight][0]) == rank - 1:
+                rep_by_weight[weight][1] = new_weight_space_sub_rep_matrix
+                rep_by_weight[weight][0].append(vector)
+
+                return rep_by_weight
+        else:
+            rep_by_weight[weight] = [[vector], vector]
+
+            return rep_by_weight
+
+
+def find_sub_rep(max_weight_space_element, lie_algebra, cartan_subalgebra, expected_size):
     # Given a weight vector, vector, in a representation, rep, of a Lie algebra, lie_algebra find the smallest subrepresentation containing vector
     # If we expect vector to be in a representation of a certain size, expected_size, then once the subrepresentation reaches this size we can stop checking if its bigger
     max_weight = weight_of_vector(max_weight_space_element, cartan_subalgebra)
 
     # We break down the subrepresentation by weight to speed up computations
-    sub_rep = {max_weight: [
+    sub_rep_by_weight = {max_weight: [
         [max_weight_space_element], max_weight_space_element]}
-    stack = [(max_weight_space_element, max_weight)]
+    sub_rep = [max_weight_space_element]
+    stack = [max_weight_space_element]
 
     while (stack):
-        print(f'sub_rep size: {sub_rep_size(sub_rep)}, stack size: {len(stack)}')
-        vector, weight = stack.pop(-1)
+        vector = stack.pop(-1)
 
         for matrix in lie_algebra:
             new_vector = matrix @ vector
-            new_weight = weight_of_vector(new_vector, cartan_subalgebra)
 
-            if new_vector.CL:
-                if new_weight in sub_rep:
-                    weight_space_sub_rep_matrix = sub_rep[new_weight][1]
-                    new_weight_space_sub_rep_matrix = weight_space_sub_rep_matrix.row_join(
-                        new_vector)
-
-                    # This is done in numpy because its faster and we can afford the numerical imprecision
-                    rank = numpy.linalg.matrix_rank(
-                        numpy.array(new_weight_space_sub_rep_matrix).astype(numpy.float64))
-
-                    if len(sub_rep[new_weight][0]) == rank - 1:
-                        print(f'sub_rep size: {sub_rep_size(sub_rep)}, stack size: {len(stack)}')
-                        sub_rep[new_weight][1] = new_weight_space_sub_rep_matrix
-                        sub_rep[new_weight][0].append(new_vector)
-                        stack.append((new_vector, new_weight))
-                else:
-                    print(f'sub_rep size: {sub_rep_size(sub_rep)}, stack size: {len(stack)}')
-                    sub_rep[new_weight] = [[new_vector], new_vector]
-                    stack.append((new_vector, new_weight))
+            if insert_into_rep_by_weight(sub_rep_by_weight, cartan_subalgebra, new_vector):
+                sub_rep.append(new_vector)
+                stack.append(new_vector)
 
             # Checking if we've already found everything
-            if expected_size and sub_rep_size(sub_rep) == expected_size:
-                stack = None
+            if expected_size and sub_rep_size(sub_rep_by_weight) == expected_size:
+                stack = []
                 break
+
+        if debug:
+            print(f'subrep size: {sub_rep_size(sub_rep_by_weight)}, stack size: {len(stack)}')
 
     return sub_rep
 
 
+def decomose_rep(h_generators_remainder_pullback, sp_generators_remainder_pullback, pullback_remainder_rep, use_expected_sizes):
+    # Given an representation of the symplectic Lie algebra, decompose it into irriducible representations, providing a basis for each one
+    total_rep_size = len(pullback_wedge_rep)
+    total_inclusion = SparseMatrix(eye(len(pullback_remainder_rep)))
+    total_irriducibles_size = 0
+    irriducble_sub_reps = []
+
+    while True:
+        max_weight = None
+        max_norm_weight = None
+
+        for new_weight_space_element in pullback_remainder_rep:
+            new_weight = weight_of_vector(new_weight_space_element, h_generators_remainder_pullback)
+            new_norm_weight = norm_weight(new_weight)
+
+            if max_norm_weight is None or new_norm_weight > max_norm_weight:
+                max_weight_space_element = new_weight_space_element
+                max_weight = new_weight
+                max_norm_weight = new_norm_weight
+
+        if use_expected_sizes:
+            expected_size = representation_dimension(max_weight)
+            print(f'Expecting {expected_size} dim subrep')
+        else:
+            expected_size = None
+
+        sub_rep = find_sub_rep(
+            max_weight_space_element, sp_generators_remainder_pullback, h_generators_remainder_pullback, expected_size)
+
+        print(f'Found {len(sub_rep)} dim subrep')
+
+        irriducble_sub_reps.append([total_inclusion @ vector for vector in sub_rep])
+        total_irriducibles_size += len(sub_rep)
+
+        if total_irriducibles_size == total_rep_size:
+            break
+
+        inclusion_sub, projection_sub = project(sub_rep)
+
+        projection_to_remainder_rep = [vector - inclusion_sub @
+                                       projection_sub @ vector for vector in pullback_remainder_rep]
+
+        remainder_rep_by_weight = {}
+        remainder_rep = []
+
+        for vector in projection_to_remainder_rep:
+            if insert_into_rep_by_weight(remainder_rep_by_weight, h_generators_remainder_pullback, vector):
+                remainder_rep.append(vector)
+
+        print(f'Found {len(remainder_rep)} dim remaining space')
+
+        inclusion_remainder, projection_remainder = project(remainder_rep)
+
+        total_inclusion = total_inclusion @ inclusion_remainder
+
+        h_generators_remainder_pullback = pullback(
+            h_generators_remainder_pullback, inclusion_remainder, projection_remainder)
+        sp_generators_remainder_pullback = pullback(
+            sp_generators_remainder_pullback, inclusion_remainder, projection_remainder)
+
+        pullback_remainder_rep = standard_basis(len(remainder_rep))
+
+    return irriducble_sub_reps
+
+
 if __name__ == '__main__':
+    # Expected Sizes
+    print('Expected subrep sizes are ' + f'{wedge_rep_size_breakdown()}'[1:-1])
+
     # First we create the standard representation
     standard_rep = standard_basis(2 * g)
     sp_generators = symplectic_generators()
@@ -270,7 +364,7 @@ if __name__ == '__main__':
                         [standard_rep[i], standard_rep[i + g], standard_rep[k + g * s_k]]) - alt(
                         [standard_rep[j], standard_rep[j + g], standard_rep[k + g * s_k]]))
 
-    print('Found basis for base represenation')
+    print('Found basis for base rep')
 
     # We now compute how the Lie algebra acts base_rep
     inclusion_base, projection_base = project(base_rep)
@@ -286,7 +380,7 @@ if __name__ == '__main__':
 
     pullback_base_rep = standard_basis(len(base_rep))
 
-    print('Found Lie algebra action on base representation')
+    print('Found Lie algebra action on base rep')
 
     # Now we compute the second exterior power of base_rep including how the Lie algebra acts on it
     wedge_rep = []
@@ -295,7 +389,7 @@ if __name__ == '__main__':
         for j in range(i):
             wedge_rep.append(alt([pullback_base_rep[i], pullback_base_rep[j]]))
 
-    print('Found basis for wedge represenation')
+    print('Found basis for wedge rep')
 
     inclusion_wedge, projection_wedge = project(wedge_rep)
 
@@ -310,20 +404,11 @@ if __name__ == '__main__':
 
     pullback_wedge_rep = standard_basis(len(wedge_rep))
 
-    print('Found Lie algebra action on wedge representation')
+    print('Found Lie algebra action on wedge rep')
 
-    # This is just for testing as of now
+    # Now we decompose the representation
 
-    max_norm_weight = -1
+    decomposition = decomose_rep(h_generators_wedge_pullback,
+                                 sp_generators_wedge_pullback, pullback_wedge_rep, True)
 
-    for new_weight_space_element in pullback_wedge_rep:
-        new_norm_weight = norm_weight(new_weight_space_element, h_generators_wedge_pullback)
-        if new_norm_weight > max_norm_weight:
-            max_weight_space_element = new_weight_space_element
-            max_norm_weight = new_norm_weight
-
-    sub_rep = find_sub_rep(max_weight_space_element, pullback_wedge_rep,
-                           sp_generators_wedge_pullback, h_generators_wedge_pullback, None)
-
-    print(len(pullback_wedge_rep))
-    print(sub_rep_size(sub_rep))
+    print('Decomposed wedge')
