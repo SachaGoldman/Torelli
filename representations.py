@@ -1,15 +1,21 @@
 import itertools
+import json
+import os.path
 
 import numpy
 from sympy import Matrix, SparseMatrix, eye
 from sympy.combinatorics.permutations import Permutation
+from sympy.parsing.sympy_parser import parse_expr
 from sympy.physics.quantum.matrixutils import matrix_tensor_product
 
 # This paramter represents the genus of the underlying surface who's Torelli Lie Algebra we're interested in
 # so all underlying vector spaces have dimension 2g
 g = 4
-# Extra debugging informations
+
+# Flags
 debug = False
+overwrite_json = False
+use_expected_sizes = True
 
 
 def tensor(obs):
@@ -271,7 +277,7 @@ def find_sub_rep(max_weight_space_element, lie_algebra, cartan_subalgebra, expec
     return sub_rep
 
 
-def decomose_rep(h_generators_remainder_pullback, sp_generators_remainder_pullback, pullback_remainder_rep, use_expected_sizes):
+def decomose_rep(h_generators_remainder_pullback, sp_generators_remainder_pullback, pullback_remainder_rep):
     # Given an representation of the symplectic Lie algebra, decompose it into irriducible representations, providing a basis for each one
     total_rep_size = len(pullback_wedge_rep)
     total_inclusion = SparseMatrix(eye(len(pullback_remainder_rep)))
@@ -336,79 +342,123 @@ def decomose_rep(h_generators_remainder_pullback, sp_generators_remainder_pullba
     return irriducble_sub_reps
 
 
+def serialize_sparse_matrix(matrix):
+    return {'entries': f'{matrix.CL}', 'dimension': matrix.shape}
+
+
+def deserialize_sparse_matrix(dictionary_representation):
+    return SparseMatrix(*dictionary_representation['dimension'], {(row, column): entry for (row, column, entry) in parse_expr(dictionary_representation['entries'])})
+
+
 if __name__ == '__main__':
-    # Expected Sizes
-    print('Expected subrep sizes are ' + f'{wedge_rep_size_breakdown()}'[1:-1])
+    if not overwrite_json and os.path.isfile(f'g_equals_{g}.json'):
+        json_file = open(f'g_equals_{g}.json', 'r')
+        deserializable_data = json.loads(json_file.read())
+        json_file.close()
 
-    # First we create the standard representation
-    standard_rep = standard_basis(2 * g)
-    sp_generators = symplectic_generators()
-    h_generators = symplectic_cartan_subalgebra_generators()
+        h_generators_wedge_pullback = [deserialize_sparse_matrix(
+            dictionary_representation) for dictionary_representation in deserializable_data['h_generators_wedge_pullback']]
+        sp_generators_wedge_pullback = [deserialize_sparse_matrix(
+            dictionary_representation) for dictionary_representation in deserializable_data['sp_generators_wedge_pullback']]
+        decomposition = [[deserialize_sparse_matrix(
+            dictionary_representation) for dictionary_representation in sup_rep] for sup_rep in deserializable_data['decomposition']]
+        h_generators_rep_pullback = [deserialize_sparse_matrix(
+            dictionary_representation) for dictionary_representation in deserializable_data['h_generators_rep_pullback']]
+        sp_generators_rep_pullback = [deserialize_sparse_matrix(
+            dictionary_representation) for dictionary_representation in deserializable_data['sp_generators_rep_pullback']]
+        pullback_base_rep = [deserialize_sparse_matrix(
+            dictionary_representation) for dictionary_representation in deserializable_data['pullback_base_rep']]
+    else:
+        # Expected Sizes
+        print('Expected subrep sizes are ' + f'{wedge_rep_size_breakdown()}'[1:-1])
 
-    print('Create basic objects')
+        # First we create the standard representation
+        standard_rep = standard_basis(2 * g)
+        sp_generators = symplectic_generators()
+        h_generators = symplectic_cartan_subalgebra_generators()
 
-    # Now we find a basis for the representation V_{1,1,1}
-    base_rep = []
+        print('Create basic objects')
 
-    for (i, j, k) in itertools.combinations(range(g), 3):
-        for (s_i, s_j, s_k) in itertools.product(*([range(2)] * 3)):
-            base_rep.append(alt([standard_rep[i + g * s_i],
-                                 standard_rep[j + g * s_j], standard_rep[k + g * s_k]]))
+        # Now we find a basis for the representation V_{1,1,1}
+        base_rep = []
 
-    for i in range(g):
-        j = (i + 1) % g
-        for k in list(range(g)):
-            if k not in (i, j):
-                for s_k in range(2):
-                    base_rep.append(alt(
-                        [standard_rep[i], standard_rep[i + g], standard_rep[k + g * s_k]]) - alt(
-                        [standard_rep[j], standard_rep[j + g], standard_rep[k + g * s_k]]))
+        for (i, j, k) in itertools.combinations(range(g), 3):
+            for (s_i, s_j, s_k) in itertools.product(*([range(2)] * 3)):
+                base_rep.append(alt([standard_rep[i + g * s_i],
+                                    standard_rep[j + g * s_j], standard_rep[k + g * s_k]]))
 
-    print('Found basis for base rep')
+        for i in range(g):
+            j = (i + 1) % g
+            for k in list(range(g)):
+                if k not in (i, j):
+                    for s_k in range(2):
+                        base_rep.append(alt(
+                            [standard_rep[i], standard_rep[i + g], standard_rep[k + g * s_k]]) - alt(
+                            [standard_rep[j], standard_rep[j + g], standard_rep[k + g * s_k]]))
 
-    # We now compute how the Lie algebra acts base_rep
-    inclusion_base, projection_base = project(base_rep)
+        print('Found basis for base rep')
 
-    h_generators_base = [derivation_action(
-        generator, 3) for generator in h_generators]
+        # We now compute how the Lie algebra acts base_rep
+        inclusion_base, projection_base = project(base_rep)
 
-    sp_generators_base = [derivation_action(
-        generator, 3) for generator in sp_generators]
+        h_generators_base = [derivation_action(
+            generator, 3) for generator in h_generators]
 
-    h_generators_rep_pullback = pullback(h_generators_base, inclusion_base, projection_base)
-    sp_generators_rep_pullback = pullback(sp_generators_base, inclusion_base, projection_base)
+        sp_generators_base = [derivation_action(
+            generator, 3) for generator in sp_generators]
 
-    pullback_base_rep = standard_basis(len(base_rep))
+        h_generators_rep_pullback = pullback(h_generators_base, inclusion_base, projection_base)
+        sp_generators_rep_pullback = pullback(sp_generators_base, inclusion_base, projection_base)
 
-    print('Found Lie algebra action on base rep')
+        pullback_base_rep = standard_basis(len(base_rep))
 
-    # Now we compute the second exterior power of base_rep including how the Lie algebra acts on it
-    wedge_rep = []
+        print('Found Lie algebra action on base rep')
 
-    for i in range(len(pullback_base_rep)):
-        for j in range(i):
-            wedge_rep.append(alt([pullback_base_rep[i], pullback_base_rep[j]]))
+        # Now we compute the second exterior power of base_rep including how the Lie algebra acts on it
+        wedge_rep = []
 
-    print('Found basis for wedge rep')
+        for i in range(len(pullback_base_rep)):
+            for j in range(i):
+                wedge_rep.append(alt([pullback_base_rep[i], pullback_base_rep[j]]))
 
-    inclusion_wedge, projection_wedge = project(wedge_rep)
+        print('Found basis for wedge rep')
 
-    h_generators_wedge = [derivation_action(
-        generator, 2) for generator in h_generators_rep_pullback]
+        inclusion_wedge, projection_wedge = project(wedge_rep)
 
-    sp_generators_wedge = [derivation_action(
-        generator, 2) for generator in sp_generators_rep_pullback]
+        h_generators_wedge = [derivation_action(
+            generator, 2) for generator in h_generators_rep_pullback]
 
-    h_generators_wedge_pullback = pullback(h_generators_wedge, inclusion_wedge, projection_wedge)
-    sp_generators_wedge_pullback = pullback(sp_generators_wedge, inclusion_wedge, projection_wedge)
+        sp_generators_wedge = [derivation_action(
+            generator, 2) for generator in sp_generators_rep_pullback]
 
-    pullback_wedge_rep = standard_basis(len(wedge_rep))
+        h_generators_wedge_pullback = pullback(
+            h_generators_wedge, inclusion_wedge, projection_wedge)
+        sp_generators_wedge_pullback = pullback(
+            sp_generators_wedge, inclusion_wedge, projection_wedge)
 
-    print('Found Lie algebra action on wedge rep')
+        pullback_wedge_rep = standard_basis(len(wedge_rep))
 
-    # Now we decompose the representation
+        print('Found Lie algebra action on wedge rep')
 
-    decomposition = decomose_rep(h_generators_wedge_pullback,
-                                 sp_generators_wedge_pullback, pullback_wedge_rep, True)
+        # Now we decompose the representation
 
-    print('Decomposed wedge')
+        decomposition = decomose_rep(h_generators_wedge_pullback,
+                                     sp_generators_wedge_pullback, pullback_wedge_rep)
+
+        print('Decomposed wedge')
+
+        serializable_data = {
+            'h_generators_wedge_pullback': [serialize_sparse_matrix(matrix) for matrix in h_generators_wedge_pullback],
+            'sp_generators_wedge_pullback': [serialize_sparse_matrix(matrix) for matrix in sp_generators_wedge_pullback],
+            'decomposition': [[serialize_sparse_matrix(matrix) for matrix in sup_rep] for sup_rep in decomposition],
+            'h_generators_rep_pullback': [serialize_sparse_matrix(matrix) for matrix in h_generators_rep_pullback],
+            'sp_generators_rep_pullback': [serialize_sparse_matrix(matrix) for matrix in sp_generators_rep_pullback],
+            'pullback_base_rep': [serialize_sparse_matrix(matrix) for matrix in pullback_base_rep]
+        }
+
+        json_file = open(f'g_equals_{g}.json', 'w')
+        json_object = json.dumps(serializable_data, indent=4)
+        json_file.write(json_object)
+        json_file.close()
+
+    print("Finished (de)serializing")
