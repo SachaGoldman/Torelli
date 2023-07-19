@@ -164,7 +164,7 @@ def wedge_rep_size_breakdown():
     elif g == 4:
         return [representation_dimension(highest_weight) for highest_weight in [[2, 2, 1, 1], [2, 2, 0, 0], [1, 1, 0, 0], [0, 0, 0, 0]]]
     elif g == 3:
-        return [representation_dimension(highest_weight) for highest_weight in [[2, 2, 0,], [0, 0, 0,]]]
+        return [representation_dimension(highest_weight) for highest_weight in [[2, 2, 0], [0, 0, 0]]]
 
 
 def psuedo_inverse(matrix):
