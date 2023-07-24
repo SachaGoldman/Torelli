@@ -7,6 +7,7 @@ from sympy import Matrix, SparseMatrix, eye
 from sympy.combinatorics.permutations import Permutation
 from sympy.parsing.sympy_parser import parse_expr
 from sympy.physics.quantum.matrixutils import matrix_tensor_product
+from sympy.polys.matrices import DomainMatrix
 
 # This paramter represents the genus of the underlying surface who's Torelli Lie Algebra we're interested in
 # so all underlying vector spaces have dimension 2g
@@ -99,6 +100,7 @@ def symplectic_generators():
     generators = []
 
     for i in range(g):
+        generators.append(H(i))
         generators.append(U(i))
         generators.append(V(i))
 
@@ -108,6 +110,26 @@ def symplectic_generators():
                 if j < i:
                     generators.append(Y(i, j))
                     generators.append(Z(i, j))
+
+    return generators
+
+
+def dual_symplectic_generators():
+    # Create the generating matricies for the symplectic Lie algebra
+    # We don't return the cartan-subalgebra, just the rest
+    generators = []
+
+    for i in range(g):
+        generators.append(H(i))
+        generators.append(2 * V(i))
+        generators.append(2 * U(i))
+
+        for j in range(g):
+            if j != i:
+                generators.append(X(j, i))
+                if j < i:
+                    generators.append(Z(j, i))
+                    generators.append(Y(j, i))
 
     return generators
 
@@ -200,6 +222,36 @@ def standard_basis(n):
     return basis
 
 
+def casimir_element(basis, dual_basis):
+    k = basis[0].shape[0]
+
+    element = SparseMatrix(k, k, [0] * (k ** 2))
+    for matrix, dual in zip(basis, dual_basis):
+        element += matrix @ dual
+
+    return element
+
+
+def serialize_sparse_matrix(matrix):
+    return {'entries': f'{matrix.CL}', 'dimension': matrix.shape}
+
+
+def deserialize_sparse_matrix(dictionary_representation):
+    return SparseMatrix(*dictionary_representation['dimension'], {(row, column): entry for (row, column, entry) in parse_expr(dictionary_representation['entries'])})
+
+
+def eigenvalue(matrix, vector):
+    new_vector = matrix @ vector
+
+    if not new_vector.CL:
+        return 0
+
+    if vector.row_join(new_vector).rank() != 1:
+        print("Fuck")
+
+    return new_vector.CL[0][2] / vector.CL[0][2]
+
+
 def copy_sub_rep(sub_rep):
     sub_rep_copy = {}
 
@@ -277,12 +329,13 @@ def find_sub_rep(max_weight_space_element, lie_algebra, cartan_subalgebra, expec
     return sub_rep
 
 
-def decomose_rep(h_generators_remainder_pullback, sp_generators_remainder_pullback, pullback_remainder_rep):
+def find_rep_eigenvalues(h_generators_remainder_pullback, sp_generators_remainder_pullback, dual_sp_generators_remainder_pullback, pullback_remainder_rep):
     # Given an representation of the symplectic Lie algebra, decompose it into irriducible representations, providing a basis for each one
-    total_rep_size = len(pullback_wedge_rep)
+    total_rep_size = len(pullback_remainder_rep)
     total_inclusion = SparseMatrix(eye(len(pullback_remainder_rep)))
     total_irriducibles_size = 0
-    irriducble_sub_reps = []
+
+    casimir_eigenvalues = []
 
     while True:
         max_weight = None
@@ -308,7 +361,18 @@ def decomose_rep(h_generators_remainder_pullback, sp_generators_remainder_pullba
 
         print(f'Found {len(sub_rep)} dim subrep')
 
-        irriducble_sub_reps.append([total_inclusion @ vector for vector in sub_rep])
+        casimir_matrix = casimir_element(
+            sp_generators_remainder_pullback, dual_sp_generators_remainder_pullback)
+        casimir_eigenvalue = eigenvalue(casimir_matrix, sub_rep[0])
+
+        for element in sub_rep:
+            if casimir_eigenvalue != eigenvalue(casimir_matrix, element):
+                print('Fuck')
+
+        casimir_eigenvalues.append(casimir_eigenvalue)
+
+        print(f'Found subspace with Casimir eigenvalue {casimir_eigenvalue}')
+
         total_irriducibles_size += len(sub_rep)
 
         if total_irriducibles_size == total_rep_size:
@@ -336,18 +400,12 @@ def decomose_rep(h_generators_remainder_pullback, sp_generators_remainder_pullba
             h_generators_remainder_pullback, inclusion_remainder, projection_remainder)
         sp_generators_remainder_pullback = pullback(
             sp_generators_remainder_pullback, inclusion_remainder, projection_remainder)
+        dual_sp_generators_remainder_pullback = pullback(
+            dual_sp_generators_remainder_pullback, inclusion_remainder, projection_remainder)
 
         pullback_remainder_rep = standard_basis(len(remainder_rep))
 
-    return irriducble_sub_reps
-
-
-def serialize_sparse_matrix(matrix):
-    return {'entries': f'{matrix.CL}', 'dimension': matrix.shape}
-
-
-def deserialize_sparse_matrix(dictionary_representation):
-    return SparseMatrix(*dictionary_representation['dimension'], {(row, column): entry for (row, column, entry) in parse_expr(dictionary_representation['entries'])})
+    return casimir_eigenvalues
 
 
 if __name__ == '__main__':
@@ -360,14 +418,19 @@ if __name__ == '__main__':
             dictionary_representation) for dictionary_representation in deserializable_data['h_generators_wedge_pullback']]
         sp_generators_wedge_pullback = [deserialize_sparse_matrix(
             dictionary_representation) for dictionary_representation in deserializable_data['sp_generators_wedge_pullback']]
-        decomposition = [[deserialize_sparse_matrix(
-            dictionary_representation) for dictionary_representation in sup_rep] for sup_rep in deserializable_data['decomposition']]
+        dual_sp_generators_wedge_pullback = [deserialize_sparse_matrix(
+            dictionary_representation) for dictionary_representation in deserializable_data['dual_sp_generators_wedge_pullback']]
+        pullback_wedge_rep = [deserialize_sparse_matrix(
+            dictionary_representation) for dictionary_representation in deserializable_data['pullback_wedge_rep']]
         h_generators_rep_pullback = [deserialize_sparse_matrix(
             dictionary_representation) for dictionary_representation in deserializable_data['h_generators_rep_pullback']]
         sp_generators_rep_pullback = [deserialize_sparse_matrix(
+            dictionary_representation) for dictionary_representation in deserializable_data['dual_sp_generators_rep_pullback']]
+        dual_sp_generators_rep_pullback = [deserialize_sparse_matrix(
             dictionary_representation) for dictionary_representation in deserializable_data['sp_generators_rep_pullback']]
         pullback_base_rep = [deserialize_sparse_matrix(
             dictionary_representation) for dictionary_representation in deserializable_data['pullback_base_rep']]
+        sub_rep_casimir_eigenvalues = parse_expr(deserializable_data['sub_rep_casimir_eigenvalues'])
     else:
         # Expected Sizes
         print('Expected subrep sizes are ' + f'{wedge_rep_size_breakdown()}'[1:-1])
@@ -375,6 +438,7 @@ if __name__ == '__main__':
         # First we create the standard representation
         standard_rep = standard_basis(2 * g)
         sp_generators = symplectic_generators()
+        dual_sp_generators = dual_symplectic_generators()
         h_generators = symplectic_cartan_subalgebra_generators()
 
         print('Create basic objects')
@@ -407,13 +471,17 @@ if __name__ == '__main__':
         sp_generators_base = [derivation_action(
             generator, 3) for generator in sp_generators]
 
+        dual_sp_generators_base = [derivation_action(
+            generator, 3) for generator in dual_sp_generators]
+
         h_generators_rep_pullback = pullback(h_generators_base, inclusion_base, projection_base)
         sp_generators_rep_pullback = pullback(sp_generators_base, inclusion_base, projection_base)
+        dual_sp_generators_rep_pullback = pullback(
+            dual_sp_generators_base, inclusion_base, projection_base)
 
         pullback_base_rep = standard_basis(len(base_rep))
 
         print('Found Lie algebra action on base rep')
-
         # Now we compute the second exterior power of base_rep including how the Lie algebra acts on it
         wedge_rep = []
 
@@ -431,10 +499,15 @@ if __name__ == '__main__':
         sp_generators_wedge = [derivation_action(
             generator, 2) for generator in sp_generators_rep_pullback]
 
+        dual_sp_generators_wedge = [derivation_action(
+            generator, 2) for generator in dual_sp_generators_rep_pullback]
+
         h_generators_wedge_pullback = pullback(
             h_generators_wedge, inclusion_wedge, projection_wedge)
         sp_generators_wedge_pullback = pullback(
             sp_generators_wedge, inclusion_wedge, projection_wedge)
+        dual_sp_generators_wedge_pullback = pullback(
+            dual_sp_generators_wedge, inclusion_wedge, projection_wedge)
 
         pullback_wedge_rep = standard_basis(len(wedge_rep))
 
@@ -442,18 +515,19 @@ if __name__ == '__main__':
 
         # Now we decompose the representation
 
-        decomposition = decomose_rep(h_generators_wedge_pullback,
-                                     sp_generators_wedge_pullback, pullback_wedge_rep)
-
-        print('Decomposed wedge')
+        sub_rep_casimir_eigenvalues = find_rep_eigenvalues(
+            h_generators_wedge_pullback, sp_generators_wedge_pullback, dual_sp_generators_wedge_pullback, pullback_wedge_rep)
 
         serializable_data = {
             'h_generators_wedge_pullback': [serialize_sparse_matrix(matrix) for matrix in h_generators_wedge_pullback],
             'sp_generators_wedge_pullback': [serialize_sparse_matrix(matrix) for matrix in sp_generators_wedge_pullback],
-            'decomposition': [[serialize_sparse_matrix(matrix) for matrix in sup_rep] for sup_rep in decomposition],
+            'dual_sp_generators_wedge_pullback': [serialize_sparse_matrix(matrix) for matrix in dual_sp_generators_wedge_pullback],
+            'pullback_wedge_rep': [serialize_sparse_matrix(matrix) for matrix in pullback_wedge_rep],
             'h_generators_rep_pullback': [serialize_sparse_matrix(matrix) for matrix in h_generators_rep_pullback],
             'sp_generators_rep_pullback': [serialize_sparse_matrix(matrix) for matrix in sp_generators_rep_pullback],
-            'pullback_base_rep': [serialize_sparse_matrix(matrix) for matrix in pullback_base_rep]
+            'dual_sp_generators_rep_pullback': [serialize_sparse_matrix(matrix) for matrix in dual_sp_generators_rep_pullback],
+            'pullback_base_rep': [serialize_sparse_matrix(matrix) for matrix in pullback_base_rep],
+            'sub_rep_casimir_eigenvalues': f'{sub_rep_casimir_eigenvalues}'
         }
 
         json_file = open(f'g_equals_{g}.json', 'w')
@@ -462,3 +536,11 @@ if __name__ == '__main__':
         json_file.close()
 
     print("Finished (de)serializing")
+
+    casimir_matrix = casimir_element(
+        sp_generators_wedge_pullback, dual_sp_generators_wedge_pullback)
+
+    identity = SparseMatrix(eye(len(pullback_wedge_rep)))
+
+    for eigenvalue in sub_rep_casimir_eigenvalues:
+        print((DomainMatrix.from_Matrix((casimir_matrix - identity * eigenvalue)).to_field().nullspace()).shape)
