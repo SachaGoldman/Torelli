@@ -11,12 +11,11 @@ from sympy.polys.matrices import DomainMatrix
 
 # This paramter represents the genus of the underlying surface who's Torelli Lie Algebra we're interested in
 # so all underlying vector spaces have dimension 2g
-g = 4
+g = 6
 
 # Flags
 debug = False
 overwrite_json = False
-use_expected_sizes = True
 
 
 def tensor(obs):
@@ -232,6 +231,15 @@ def casimir_element(basis, dual_basis):
     return element
 
 
+def eigenvalue(matrix, vector):
+    new_vector = matrix @ vector
+
+    if not new_vector.CL:
+        return 0
+
+    return new_vector.CL[0][2] / vector.CL[0][2]
+
+
 def serialize_sparse_matrix(matrix):
     return {'entries': f'{matrix.CL}', 'dimension': matrix.shape}
 
@@ -240,172 +248,47 @@ def deserialize_sparse_matrix(dictionary_representation):
     return SparseMatrix(*dictionary_representation['dimension'], {(row, column): entry for (row, column, entry) in parse_expr(dictionary_representation['entries'])})
 
 
-def eigenvalue(matrix, vector):
-    new_vector = matrix @ vector
+def decompose(representation, casimir_matrix, h_generators):
+    # decompose a representation by subrepresentation, we assume the represenation is given by a basis of weights
+    representation_by_weight = {}
 
-    if not new_vector.CL:
-        return 0
+    for vector in representation:
+        weight = weight_of_vector(vector, h_generators)
 
-    if vector.row_join(new_vector).rank() != 1:
-        print("Fuck")
+        if not weight in representation_by_weight:
+            representation_by_weight[weight] = []
 
-    return new_vector.CL[0][2] / vector.CL[0][2]
+        representation_by_weight[weight].append(vector)
 
+    irriducible_sub_reps = {}
 
-def copy_sub_rep(sub_rep):
-    sub_rep_copy = {}
+    print('Decomposed representation by weight')
 
-    for weight in sub_rep:
-        sub_rep_copy[weight] = [[vector.copy() for vector in sub_rep[weight][0]],
-                                sub_rep[weight][1].copy()]
+    eigenvalues = casimir_matrix.eigenvals().keys()
 
-    return sub_rep_copy
+    print('Found eigenvalues ' + f'{list(eigenvalues)}'[1:-1])
 
+    for eigenvalue in eigenvalues:
+        irriducible_sub_reps[eigenvalue] = []
 
-def sub_rep_size(sub_rep):
-    # Calculate the size of an subrepresentation
-    size = 0
+    for weight, weight_space in representation_by_weight.items():
+        k = len(weight_space)
 
-    for weight in sub_rep:
-        size += len(sub_rep[weight][0])
+        weight_space_inclusion, weight_space_projection = project(weight_space)
 
-    return size
+        casimir_matrix_pullback = pullback([casimir_matrix], weight_space_inclusion,
+                                           weight_space_projection)[0]
 
+        for eigenvalue in eigenvalues:
+            kernel_matrix = SparseMatrix((DomainMatrix.from_Matrix(
+                (casimir_matrix_pullback - eye(k) * eigenvalue)).to_field().nullspace()).to_Matrix())
 
-def insert_into_rep_by_weight(rep_by_weight, cartan_subalgebra, vector):
-    # Returns the rep and the vector if insertion was successful, and None otherwise
-    if vector.CL:
-        weight = weight_of_vector(vector, cartan_subalgebra)
+            kernel = [weight_space_inclusion @
+                      kernel_matrix.row(n).T for n in range(kernel_matrix.shape[0])]
 
-        if weight in rep_by_weight:
-            weight_space_sub_rep_matrix = rep_by_weight[weight][1]
-            new_weight_space_sub_rep_matrix = weight_space_sub_rep_matrix.row_join(
-                vector)
+            irriducible_sub_reps[eigenvalue].extend(kernel)
 
-            # This is done in numpy because its faster and we can afford the numerical imprecision
-            rank = numpy.linalg.matrix_rank(
-                numpy.array(new_weight_space_sub_rep_matrix).astype(numpy.float64))
-
-            if len(rep_by_weight[weight][0]) == rank - 1:
-                rep_by_weight[weight][1] = new_weight_space_sub_rep_matrix
-                rep_by_weight[weight][0].append(vector)
-
-                return rep_by_weight
-        else:
-            rep_by_weight[weight] = [[vector], vector]
-
-            return rep_by_weight
-
-
-def find_sub_rep(max_weight_space_element, lie_algebra, cartan_subalgebra, expected_size):
-    # Given a weight vector, vector, in a representation, rep, of a Lie algebra, lie_algebra find the smallest subrepresentation containing vector
-    # If we expect vector to be in a representation of a certain size, expected_size, then once the subrepresentation reaches this size we can stop checking if its bigger
-    max_weight = weight_of_vector(max_weight_space_element, cartan_subalgebra)
-
-    # We break down the subrepresentation by weight to speed up computations
-    sub_rep_by_weight = {max_weight: [
-        [max_weight_space_element], max_weight_space_element]}
-    sub_rep = [max_weight_space_element]
-    stack = [max_weight_space_element]
-
-    while (stack):
-        vector = stack.pop(-1)
-
-        for matrix in lie_algebra:
-            new_vector = matrix @ vector
-
-            if insert_into_rep_by_weight(sub_rep_by_weight, cartan_subalgebra, new_vector):
-                sub_rep.append(new_vector)
-                stack.append(new_vector)
-
-            # Checking if we've already found everything
-            if expected_size and sub_rep_size(sub_rep_by_weight) == expected_size:
-                stack = []
-                break
-
-        if debug:
-            print(f'subrep size: {sub_rep_size(sub_rep_by_weight)}, stack size: {len(stack)}')
-
-    return sub_rep
-
-
-def find_rep_eigenvalues(h_generators_remainder_pullback, sp_generators_remainder_pullback, dual_sp_generators_remainder_pullback, pullback_remainder_rep):
-    # Given an representation of the symplectic Lie algebra, decompose it into irriducible representations, providing a basis for each one
-    total_rep_size = len(pullback_remainder_rep)
-    total_inclusion = SparseMatrix(eye(len(pullback_remainder_rep)))
-    total_irriducibles_size = 0
-
-    casimir_eigenvalues = []
-
-    while True:
-        max_weight = None
-        max_norm_weight = None
-
-        for new_weight_space_element in pullback_remainder_rep:
-            new_weight = weight_of_vector(new_weight_space_element, h_generators_remainder_pullback)
-            new_norm_weight = norm_weight(new_weight)
-
-            if max_norm_weight is None or new_norm_weight > max_norm_weight:
-                max_weight_space_element = new_weight_space_element
-                max_weight = new_weight
-                max_norm_weight = new_norm_weight
-
-        if use_expected_sizes:
-            expected_size = representation_dimension(max_weight)
-            print(f'Expecting {expected_size} dim subrep')
-        else:
-            expected_size = None
-
-        sub_rep = find_sub_rep(
-            max_weight_space_element, sp_generators_remainder_pullback, h_generators_remainder_pullback, expected_size)
-
-        print(f'Found {len(sub_rep)} dim subrep')
-
-        casimir_matrix = casimir_element(
-            sp_generators_remainder_pullback, dual_sp_generators_remainder_pullback)
-        casimir_eigenvalue = eigenvalue(casimir_matrix, sub_rep[0])
-
-        for element in sub_rep:
-            if casimir_eigenvalue != eigenvalue(casimir_matrix, element):
-                print('Fuck')
-
-        casimir_eigenvalues.append(casimir_eigenvalue)
-
-        print(f'Found subspace with Casimir eigenvalue {casimir_eigenvalue}')
-
-        total_irriducibles_size += len(sub_rep)
-
-        if total_irriducibles_size == total_rep_size:
-            break
-
-        inclusion_sub, projection_sub = project(sub_rep)
-
-        projection_to_remainder_rep = [vector - inclusion_sub @
-                                       projection_sub @ vector for vector in pullback_remainder_rep]
-
-        remainder_rep_by_weight = {}
-        remainder_rep = []
-
-        for vector in projection_to_remainder_rep:
-            if insert_into_rep_by_weight(remainder_rep_by_weight, h_generators_remainder_pullback, vector):
-                remainder_rep.append(vector)
-
-        print(f'Found {len(remainder_rep)} dim remaining space')
-
-        inclusion_remainder, projection_remainder = project(remainder_rep)
-
-        total_inclusion = total_inclusion @ inclusion_remainder
-
-        h_generators_remainder_pullback = pullback(
-            h_generators_remainder_pullback, inclusion_remainder, projection_remainder)
-        sp_generators_remainder_pullback = pullback(
-            sp_generators_remainder_pullback, inclusion_remainder, projection_remainder)
-        dual_sp_generators_remainder_pullback = pullback(
-            dual_sp_generators_remainder_pullback, inclusion_remainder, projection_remainder)
-
-        pullback_remainder_rep = standard_basis(len(remainder_rep))
-
-    return casimir_eigenvalues
+    return irriducible_sub_reps.values()
 
 
 if __name__ == '__main__':
@@ -430,7 +313,8 @@ if __name__ == '__main__':
             dictionary_representation) for dictionary_representation in deserializable_data['sp_generators_rep_pullback']]
         pullback_base_rep = [deserialize_sparse_matrix(
             dictionary_representation) for dictionary_representation in deserializable_data['pullback_base_rep']]
-        sub_rep_casimir_eigenvalues = parse_expr(deserializable_data['sub_rep_casimir_eigenvalues'])
+        irriducible_sub_reps = [[deserialize_sparse_matrix(
+            dictionary_representation) for dictionary_representation in irriducible_sub_rep] for irriducible_sub_rep in deserializable_data['irriducible_sub_reps']]
     else:
         # Expected Sizes
         print('Expected subrep sizes are ' + f'{wedge_rep_size_breakdown()}'[1:-1])
@@ -513,10 +397,14 @@ if __name__ == '__main__':
 
         print('Found Lie algebra action on wedge rep')
 
-        # Now we decompose the representation
+        casimir_matrix = casimir_element(
+            sp_generators_wedge_pullback, dual_sp_generators_wedge_pullback)
 
-        sub_rep_casimir_eigenvalues = find_rep_eigenvalues(
-            h_generators_wedge_pullback, sp_generators_wedge_pullback, dual_sp_generators_wedge_pullback, pullback_wedge_rep)
+        irriducible_sub_reps = decompose(
+            pullback_wedge_rep, casimir_matrix, h_generators_wedge_pullback)
+
+        print('Found subreps of sizes ' +
+              f'{[len(sub_rep) for sub_rep in irriducible_sub_reps]}'[1:-1])
 
         serializable_data = {
             'h_generators_wedge_pullback': [serialize_sparse_matrix(matrix) for matrix in h_generators_wedge_pullback],
@@ -527,7 +415,7 @@ if __name__ == '__main__':
             'sp_generators_rep_pullback': [serialize_sparse_matrix(matrix) for matrix in sp_generators_rep_pullback],
             'dual_sp_generators_rep_pullback': [serialize_sparse_matrix(matrix) for matrix in dual_sp_generators_rep_pullback],
             'pullback_base_rep': [serialize_sparse_matrix(matrix) for matrix in pullback_base_rep],
-            'sub_rep_casimir_eigenvalues': f'{sub_rep_casimir_eigenvalues}'
+            'irriducible_sub_reps': [[serialize_sparse_matrix(matrix) for matrix in irriducible_sub_rep] for irriducible_sub_rep in irriducible_sub_reps]
         }
 
         json_file = open(f'g_equals_{g}.json', 'w')
@@ -536,11 +424,3 @@ if __name__ == '__main__':
         json_file.close()
 
     print("Finished (de)serializing")
-
-    casimir_matrix = casimir_element(
-        sp_generators_wedge_pullback, dual_sp_generators_wedge_pullback)
-
-    identity = SparseMatrix(eye(len(pullback_wedge_rep)))
-
-    for eigenvalue in sub_rep_casimir_eigenvalues:
-        print((DomainMatrix.from_Matrix((casimir_matrix - identity * eigenvalue)).to_field().nullspace()).shape)
