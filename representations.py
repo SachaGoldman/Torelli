@@ -11,7 +11,9 @@ from sympy.polys.matrices import DomainMatrix
 
 # This paramter represents the genus of the underlying surface who's Torelli Lie Algebra we're interested in
 # so all underlying vector spaces have dimension 2g
-g = 6
+g = 3
+# The represents the degree of depth to calculate the graded Lie algebra to
+k = 2
 
 # Flags
 debug = False
@@ -291,6 +293,22 @@ def decompose(representation, casimir_matrix, h_generators):
     return irriducible_sub_reps.values()
 
 
+def lyndon_words(s, n):
+    w = [-1]
+    while w:
+        w[-1] += 1
+        yield w
+        m = len(w)
+        while len(w) < n:
+            w.append(w[-m])
+        while w and w[-1] == s - 1:
+            w.pop()
+
+
+def free_lie_algebra(basis, max_degree):
+    pass  # Use lyndon words
+
+
 if __name__ == '__main__':
     if not overwrite_json and os.path.isfile(f'g_equals_{g}.json'):
         json_file = open(f'g_equals_{g}.json', 'r')
@@ -325,7 +343,7 @@ if __name__ == '__main__':
         dual_sp_generators = dual_symplectic_generators()
         h_generators = symplectic_cartan_subalgebra_generators()
 
-        print('Create basic objects')
+        print('Created basic objects')
 
         # Now we find a basis for the representation V_{1,1,1}
         base_rep = []
@@ -424,3 +442,5 @@ if __name__ == '__main__':
         json_file.close()
 
     print("Finished (de)serializing")
+
+    # print(len([w for w in lyndon_words(110, 4)]))
